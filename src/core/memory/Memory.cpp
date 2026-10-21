@@ -1,0 +1,265 @@
+#include "Memory.hpp"
+#include <tlhelp32.h>
+
+uint32_t pProcess::FindProcessIdByProcessName(const char* ProcessName)
+{
+	std::wstring wideProcessName;
+	int wideCharLength = MultiByteToWideChar(CP_UTF8, 0, ProcessName, -1, nullptr, 0);
+	if (wideCharLength > 1)
+	{
+		wideProcessName.resize(static_cast<size_t>(wideCharLength - 1));
+		MultiByteToWideChar(CP_UTF8, 0, ProcessName, -1, wideProcessName.data(), wideCharLength);
+	}
+
+	HANDLE hPID = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, NULL);
+	if (hPID == INVALID_HANDLE_VALUE)
+		return 0;
+
+	PROCESSENTRY32W process_entry_{ };
+	process_entry_.dwSize = sizeof(PROCESSENTRY32W);
+
+	DWORD pid = 0;
+	if (Process32FirstW(hPID, &process_entry_))
+	{
+		do
+		{
+			if (!wcscmp(process_entry_.szExeFile, wideProcessName.c_str()))
+			{
+				pid = process_entry_.th32ProcessID;
+				break;
+			}
+		} while (Process32NextW(hPID, &process_entry_));
+	}
+	CloseHandle(hPID);
+	return pid;
+}
+
+uint32_t pProcess::FindProcessIdByWindowName(const char* WindowName)
+{
+	DWORD process_id = 0;
+	HWND windowHandle = FindWindowA(nullptr, WindowName);
+	if (windowHandle)
+		GetWindowThreadProcessId(windowHandle, &process_id);
+	return process_id;
+}
+
+HWND pProcess::GetWindowHandleFromProcessId(DWORD ProcessId) {
+	HWND hwnd = NULL;
+	do {
+		hwnd = FindWindowEx(NULL, hwnd, NULL, NULL);
+		DWORD pid = 0;
+		GetWindowThreadProcessId(hwnd, &pid);
+		if (pid == ProcessId) {
+			TCHAR windowTitle[MAX_PATH];
+			GetWindowText(hwnd, windowTitle, MAX_PATH);
+			if (IsWindowVisible(hwnd) && windowTitle[0] != '\0') {
+				return hwnd;
+			}
+		}
+	} while (hwnd != NULL);
+	return NULL; // No main window found for the given process ID
+}
+
+bool pProcess::AttachProcess(const char* ProcessName)
+{
+	this->pid_ = this->FindProcessIdByProcessName(ProcessName);
+
+	if (pid_)
+	{
+		HMODULE modules[0xFF]{};
+		MODULEINFO module_info{};
+		DWORD needed = 0;
+
+		handle_ = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_OPERATION |
+                                PROCESS_VM_READ | PROCESS_VM_WRITE, FALSE, pid_);
+
+		if (!handle_)
+			return false;
+
+		if (!EnumProcessModulesEx(this->handle_, modules, sizeof(modules), &needed, LIST_MODULES_64BIT) || !modules[0])
+		{
+			CloseHandle(handle_);
+			handle_ = nullptr;
+			return false;
+		}
+
+		base_client_.base = (uintptr_t)modules[0];
+
+		if (GetModuleInformation(this->handle_, modules[0], &module_info, sizeof(module_info)))
+			base_client_.size = module_info.SizeOfImage;
+
+		hwnd_ = this->GetWindowHandleFromProcessId(pid_);
+
+		return true;
+	}
+
+	return false;
+}
+
+bool pProcess::AttachWindow(const char* WindowName)
+{
+	this->pid_ = this->FindProcessIdByWindowName(WindowName);
+
+	if (pid_)
+	{
+		HMODULE modules[0xFF]{};
+		MODULEINFO module_info{};
+		DWORD needed = 0;
+
+		handle_ = OpenProcess(PROCESS_ALL_ACCESS, FALSE, pid_);
+		if (!handle_)
+			return false;
+
+		if (!EnumProcessModulesEx(this->handle_, modules, sizeof(modules), &needed, LIST_MODULES_64BIT) || !modules[0])
+		{
+			CloseHandle(handle_);
+			handle_ = nullptr;
+			return false;
+		}
+
+		base_client_.base = (uintptr_t)modules[0];
+
+		if (GetModuleInformation(this->handle_, modules[0], &module_info, sizeof(module_info)))
+			base_client_.size = module_info.SizeOfImage;
+
+		hwnd_ = this->GetWindowHandleFromProcessId(pid_);
+
+		return true;
+	}
+	return false;
+}
+
+bool pProcess::UpdateHWND()
+{
+	hwnd_ = this->GetWindowHandleFromProcessId(pid_);
+	return hwnd_ != nullptr;
+}
+
+ProcessModule pProcess::GetModule(const char* lModule)
+{
+	std::wstring wideModule;
+	int wideCharLength = MultiByteToWideChar(CP_UTF8, 0, lModule, -1, nullptr, 0);
+	if (wideCharLength > 1)
+	{
+		wideModule.resize(static_cast<size_t>(wideCharLength - 1));
+		MultiByteToWideChar(CP_UTF8, 0, lModule, -1, wideModule.data(), wideCharLength);
+	}
+
+	HANDLE handle_module = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, pid_);
+	if (handle_module == INVALID_HANDLE_VALUE)
+		return { 0, 0 };
+
+	MODULEENTRY32W module_entry_{};
+	module_entry_.dwSize = sizeof(MODULEENTRY32W);
+
+	if (!Module32FirstW(handle_module, &module_entry_))
+	{
+		CloseHandle(handle_module);
+		return { 0, 0 };
+	}
+
+	do
+	{
+		if (!_wcsicmp(module_entry_.szModule, wideModule.c_str()))
+		{
+			CloseHandle(handle_module);
+			return { (DWORD_PTR)module_entry_.modBaseAddr, module_entry_.modBaseSize };
+		}
+	} while (Module32NextW(handle_module, &module_entry_));
+
+	CloseHandle(handle_module);
+	return { 0, 0 };
+}
+
+LPVOID pProcess::Allocate(size_t size_in_bytes)
+{
+	return VirtualAllocEx(this->handle_, NULL, size_in_bytes, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+}
+
+uintptr_t pProcess::FindSignature(std::vector<uint8_t> signature)
+{
+	if (!this->base_client_.base || !this->base_client_.size || signature.empty())
+		return 0x0;
+
+	const size_t sig_size = signature.size();
+	if (sig_size > this->base_client_.size)
+		return 0x0;
+
+	auto data = std::make_unique<uint8_t[]>(this->base_client_.size);
+
+	if (!ReadProcessMemory(this->handle_, (void*)(this->base_client_.base), data.get(), this->base_client_.size, NULL)) {
+		return 0x0;
+	}
+
+	for (uintptr_t i = 0; i + sig_size <= this->base_client_.size; i++)
+	{
+		for (uintptr_t j = 0; j < sig_size; j++)
+		{
+			if (signature.at(j) == 0x00)
+				continue;
+
+			if (data[i + j] == signature.at(j))
+			{
+				if (j == sig_size - 1)
+					return this->base_client_.base + i;
+				continue;
+			}
+			break;
+		}
+	}
+	return 0x0;
+}
+
+uintptr_t pProcess::FindSignature(ProcessModule target_module, std::vector<uint8_t> signature)
+{
+	if (!target_module.base || !target_module.size || signature.empty())
+		return 0x0;
+
+	const size_t sig_size = signature.size();
+	if (sig_size > target_module.size)
+		return 0x0;
+
+	auto data = std::make_unique<uint8_t[]>(target_module.size);
+
+	if (!ReadProcessMemory(this->handle_, (void*)(target_module.base), data.get(), target_module.size, NULL)) {
+		return 0x0;
+	}
+
+	for (uintptr_t i = 0; i + sig_size <= target_module.size; i++)
+	{
+		for (uintptr_t j = 0; j < sig_size; j++)
+		{
+			if (signature.at(j) == 0x00)
+				continue;
+
+			if (data[i + j] == signature.at(j))
+			{
+				if (j == sig_size - 1)
+					return target_module.base + i;
+				continue;
+			}
+			break;
+		}
+	}
+	return 0x0;
+}
+
+uintptr_t pProcess::FindCodeCave(uint32_t length_in_bytes)
+{
+	std::vector<uint8_t> cave_pattern = {};
+
+	for (uint32_t i = 0; i < length_in_bytes; i++) {
+		cave_pattern.push_back(0x00);
+	}
+
+	return FindSignature(cave_pattern);
+}
+
+void pProcess::Close()
+{
+	if (handle_)
+	{
+		CloseHandle(handle_);
+		handle_ = nullptr;
+	}
+}
