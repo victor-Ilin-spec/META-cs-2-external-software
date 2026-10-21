@@ -1,0 +1,15 @@
+{
+    "version": 1,
+    "revision": 0,
+    "rules": [
+        {
+            "primary-output": "x64\\Debug\\Cache.obj",
+            "outputs": [
+                "x64\\Debug\\Cache.cpp.obj.dt.module.json",
+                "x64\\Debug\\Cache.cpp.obj.dt.d.json",
+                "x64\\Debug\\cs2-external-esp.pch"
+            ],
+            "requires": []
+        }
+    ]
+}
