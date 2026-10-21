@@ -1,0 +1,39 @@
+#pragma once
+
+#include <algorithm>
+#include <cmath>
+#include <codecvt>
+#include <cstdint>
+#include <functional>
+#include <locale>
+#include <map>
+#include <memory>
+#include <sstream>
+#include <string>
+#include <unordered_map>
+#include <vector>
+
+#include <d3d11.h>
+#include <imgui.h>
+#include <imgui_internal.h>
+
+#include "slog.hh"
+#include "math/math.hh"
+#include "animations/animations.hh"
+#include "render/render.hh"
+#include "framework/context/context.hh"
+#include "framework/gui/base_element/base_element.hh"
+#include "framework/gui/checkbox/checkbox.hh"
+#include "framework/gui/slider/slider.hh"
+#include "framework/gui/dropdown/dropdown.hh"
+#include "framework/gui/multibox/multibox.hh"
+#include "framework/gui/button/button.hh"
+#include "framework/gui/colorpicker/colorpicker.hh"
+#include "framework/gui/keybind/keybind.hh"
+#include "framework/gui/textinput/textinput.hh"
+#include "framework/gui/listbox/listbox.hh"
+#include "framework/gui/popup/popup.hh"
+#include "framework/gui/child/child.hh"
+#include "framework/gui/tab/tab.hh"
+#include "framework/gui/window/window.hh"
+#include "framework/menu.hh"
