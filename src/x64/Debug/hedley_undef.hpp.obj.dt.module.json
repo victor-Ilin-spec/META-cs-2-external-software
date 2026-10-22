@@ -1,0 +1,15 @@
+{
+    "version": 1,
+    "revision": 0,
+    "rules": [
+        {
+            "primary-output": "x64\\Debug\\hedley_undef.obj",
+            "outputs": [
+                "x64\\Debug\\hedley_undef.hpp.obj.dt.module.json",
+                "x64\\Debug\\hedley_undef.hpp.obj.dt.d.json",
+                "x64\\Debug\\cs2-external-esp.pch"
+            ],
+            "requires": []
+        }
+    ]
+}
